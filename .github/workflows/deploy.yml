@@ -61,6 +61,10 @@ jobs:
         chmod 600 ~/.ssh/id_rsa
         ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
 
+    - name: Test SSH connection
+      run: |
+        ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@${{ secrets.EC2_HOST }} "echo '✅ Connected from GitHub Actions'"
+
     - name: Deploy binary to EC2
       run: |
         scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no url-shortener ubuntu@${{ secrets.EC2_HOST }}:/home/ubuntu/url-shortener/url-shortener
