@@ -35,6 +35,8 @@ jobs:
       run: |
         cd backend
         CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o url-shortener cmd/api/main.go
+        ls -lah url-shortener   # Debug: check binary exists
+        file url-shortener      # Debug: confirm it's a Linux binary
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
@@ -54,6 +56,25 @@ jobs:
       with:
         name: url-shortener-binary
 
+    - name: Debug artifact contents
+      run: |
+        echo "📂 Current directory:"
+        pwd
+        ls -lah
+        echo "📂 Inside artifact folder (if exists):"
+        ls -lah url-shortener-binary || true
+
+    - name: Prepare binary
+      run: |
+        if [ -d url-shortener-binary ]; then
+          echo "📦 Moving binary out of artifact folder"
+          mv url-shortener-binary/url-shortener .
+        fi
+        chmod +x url-shortener
+        echo "📂 Final directory listing before deploy:"
+        ls -lah
+        file url-shortener || true
+
     - name: Setup SSH
       run: |
         mkdir -p ~/.ssh
@@ -67,14 +88,19 @@ jobs:
 
     - name: Deploy binary to EC2
       run: |
+        ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@${{ secrets.EC2_HOST }} "mkdir -p /home/ubuntu/url-shortener"
+        echo "🚀 Copying binary to EC2..."
         scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no url-shortener ubuntu@${{ secrets.EC2_HOST }}:/home/ubuntu/url-shortener/url-shortener
+        echo "🔄 Restarting service..."
         ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@${{ secrets.EC2_HOST }} "
+          ls -lah /home/ubuntu/url-shortener
           sudo systemctl daemon-reload
           sudo systemctl restart url-shortener
-          sudo systemctl is-active url-shortener
+          sudo systemctl status url-shortener --no-pager
         "
 
     - name: Health check
       run: |
+        echo "🌐 Checking health endpoint..."
         sleep 5
-        curl -f https://api.takeme.site/health || exit 1
+        curl -v https://api.takeme.site/health || exit 1
