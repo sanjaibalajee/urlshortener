@@ -24,22 +24,23 @@ jobs:
         path: |
           ~/.cache/go-build
           ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        key: ${{ runner.os }}-go-${{ hashFiles('backend/go.sum') }}
         restore-keys: |
           ${{ runner.os }}-go-
 
     - name: Download dependencies
-      run: go mod download
+      run: cd backend && go mod download
     
     - name: Build for Linux AMD64
       run: |
+        cd backend
         CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o url-shortener cmd/api/main.go
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: url-shortener-binary
-        path: url-shortener
+        path: backend/url-shortener
         retention-days: 1
 
   deploy:
