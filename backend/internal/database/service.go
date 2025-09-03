@@ -122,7 +122,7 @@ func NewWithConfig(config *DBConfig) Service {
 	}
 	
 	// Build connection string
-	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable&search_path=%s", 
+	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=require&search_path=%s", 
 		username, password, host, port, database, schema)
 	
 	log.Printf("[DATABASE] Connecting to database: %s@%s:%s/%s", username, host, port, database)
