@@ -1,4 +1,4 @@
-import { GitHubLogoIcon, InstagramLogoIcon } from "@radix-ui/react-icons";
+import { GitHubLogoIcon, LinkedInLogoIcon } from "@radix-ui/react-icons";
 import { buttonVariants } from "./ui/button";
 import XLogoIcon from "./Icons/x";
 import { socialLinks } from "@/lib/constants";
@@ -13,9 +13,9 @@ export const Footer = () => {
           variant: "glass", 
           size: "icon-xl" 
         })} 
-        href={socialLinks.instagram}
+        href={socialLinks.linkedin}
       >
-        <InstagramLogoIcon className="size-6" />
+        <LinkedInLogoIcon className="size-6" />
       </Link>
       <Link 
         target="_blank" 

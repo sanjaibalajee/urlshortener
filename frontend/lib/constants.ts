@@ -1,5 +1,5 @@
 export const socialLinks = {
-  instagram: "https://instagram.com",
-  x: "https://x.com",
-  github: "https://github.com"
+  linkedin: "https://in.linkedin.com/in/sanjai-balajee",
+  x: "https://x.com/idynamightt",
+  github: "https://github.com/sanjaibalajee"
 };
