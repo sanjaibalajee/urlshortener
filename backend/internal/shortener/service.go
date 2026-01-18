@@ -7,8 +7,10 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"backend/internal/cache"
 	"backend/internal/database"
 	"backend/internal/models"
 )
@@ -33,6 +35,15 @@ type Service interface {
 	// Utility operations
 	ValidateCustomCode(ctx context.Context, code string) error
 	GetRecentURLs(ctx context.Context, limit int) ([]*models.URL, error)
+
+	// Lifecycle operations
+	Shutdown(ctx context.Context) error
+}
+
+// clickJob represents an async click recording job
+type clickJob struct {
+	url      *models.URL
+	clickCtx *ClickContext
 }
 
 // service implements the Service interface
@@ -40,7 +51,25 @@ type service struct {
 	repo      database.URLRepository
 	generator *Generator
 	config    *Config
+
+	// URL cache for fast redirects
+	urlCache *cache.LRU[string, *models.URL]
+
+	// Worker pool for async click recording
+	clickChan chan clickJob
+	wg        sync.WaitGroup
+	shutdown  chan struct{}
 }
+
+const (
+	// Cache configuration
+	urlCacheCapacity = 10000
+	urlCacheTTL      = 5 * time.Minute
+
+	// Worker pool configuration
+	clickWorkers    = 4
+	clickBufferSize = 1000
+)
 
 // NewService creates a new shortener service
 func NewService(repo database.URLRepository, config *Config) Service {
@@ -56,14 +85,25 @@ func NewService(repo database.URLRepository, config *Config) Service {
 		log.Fatalf("[SHORTENER] FATAL: Failed to create generator: %v", err)
 	}
 
-	log.Printf("[SHORTENER] Service initialized - BaseURL: %s, CodeLength: %d, MaxRetries: %d",
-		config.BaseURL, config.DefaultCodeLength, config.MaxRetries)
-
-	return &service{
+	svc := &service{
 		repo:      repo,
 		generator: generator,
 		config:    config,
+		urlCache:  cache.NewLRU[string, *models.URL](urlCacheCapacity, urlCacheTTL),
+		clickChan: make(chan clickJob, clickBufferSize),
+		shutdown:  make(chan struct{}),
 	}
+
+	// Start click workers
+	for i := 0; i < clickWorkers; i++ {
+		svc.wg.Add(1)
+		go svc.clickWorker(i)
+	}
+
+	log.Printf("[SHORTENER] Service initialized - BaseURL: %s, CodeLength: %d, MaxRetries: %d, CacheSize: %d, Workers: %d",
+		config.BaseURL, config.DefaultCodeLength, config.MaxRetries, urlCacheCapacity, clickWorkers)
+
+	return svc
 }
 
 // DefaultConfig returns the default configuration
@@ -133,16 +173,28 @@ func (s *service) CreateShortURL(ctx context.Context, req *CreateURLRequest) (*m
 func (s *service) GetURLForRedirect(ctx context.Context, shortCode string, clickCtx *ClickContext) (*models.URL, error) {
 	log.Printf("[SHORTENER] Getting URL for redirect: %s", shortCode)
 
-	// Get URL from database
-	url, err := s.repo.GetURLByShortCode(ctx, shortCode)
-	if err != nil {
-		log.Printf("[SHORTENER] ERROR: URL not found: %s", shortCode)
-		return nil, ErrURLNotFound
+	// Check cache first
+	url, found := s.urlCache.Get(shortCode)
+	if !found {
+		// Cache miss - get from database
+		var err error
+		url, err = s.repo.GetURLByShortCode(ctx, shortCode)
+		if err != nil {
+			log.Printf("[SHORTENER] ERROR: URL not found: %s", shortCode)
+			return nil, ErrURLNotFound
+		}
+		// Store in cache for future requests
+		s.urlCache.Set(shortCode, url)
+		log.Printf("[SHORTENER] Cache miss for %s, fetched from DB", shortCode)
+	} else {
+		log.Printf("[SHORTENER] Cache hit for %s", shortCode)
 	}
 
 	// Check if URL is accessible
 	if !url.IsAccessible() {
 		if url.IsExpired() {
+			// Remove expired URL from cache
+			s.urlCache.Delete(shortCode)
 			log.Printf("[SHORTENER] ERROR: URL expired: %s", shortCode)
 			return nil, ErrURLExpired
 		}
@@ -150,14 +202,15 @@ func (s *service) GetURLForRedirect(ctx context.Context, shortCode string, click
 		return nil, ErrURLInactive
 	}
 
-	// Record click asynchronously (don't block redirect)
+	// Queue click for async recording (don't block redirect)
 	if s.config.EnableAnalytics && clickCtx != nil {
-		go func() {
-			asyncCtx := context.Background() // Use background context for async operation
-			if err := s.recordClickAsync(asyncCtx, url, clickCtx); err != nil {
-				log.Printf("[SHORTENER] WARNING: Failed to record click: %v", err)
-			}
-		}()
+		select {
+		case s.clickChan <- clickJob{url: url, clickCtx: clickCtx}:
+			// Successfully queued
+		default:
+			// Buffer full, log and drop
+			log.Printf("[SHORTENER] WARNING: Click buffer full, dropping click for %s", shortCode)
+		}
 	}
 
 	log.Printf("[SHORTENER] SUCCESS: URL found for redirect - ID=%d, Target=%s", url.ID, url.TargetURL)
@@ -223,6 +276,9 @@ func (s *service) UpdateURL(ctx context.Context, shortCode string, req *UpdateUR
 		return nil, fmt.Errorf("failed to update URL: %w", err)
 	}
 
+	// Invalidate cache
+	s.urlCache.Delete(shortCode)
+
 	log.Printf("[SHORTENER] SUCCESS: Updated URL: %s", shortCode)
 	return url, nil
 }
@@ -234,6 +290,9 @@ func (s *service) DeactivateURL(ctx context.Context, shortCode string) error {
 	if err := s.repo.DeactivateURL(ctx, shortCode); err != nil {
 		return fmt.Errorf("failed to deactivate URL: %w", err)
 	}
+
+	// Invalidate cache
+	s.urlCache.Delete(shortCode)
 
 	log.Printf("[SHORTENER] SUCCESS: Deactivated URL: %s", shortCode)
 	return nil
@@ -609,4 +668,68 @@ func extractIPAddress(r *http.Request) string {
 	}
 
 	return r.RemoteAddr
+}
+
+// clickWorker processes click recording jobs from the channel
+func (s *service) clickWorker(id int) {
+	defer s.wg.Done()
+	log.Printf("[SHORTENER] Click worker %d started", id)
+
+	for {
+		select {
+		case <-s.shutdown:
+			log.Printf("[SHORTENER] Click worker %d shutting down", id)
+			return
+		case job, ok := <-s.clickChan:
+			if !ok {
+				log.Printf("[SHORTENER] Click worker %d channel closed", id)
+				return
+			}
+			ctx := context.Background()
+			if err := s.recordClickAsync(ctx, job.url, job.clickCtx); err != nil {
+				log.Printf("[SHORTENER] WARNING: Worker %d failed to record click: %v", id, err)
+			}
+		}
+	}
+}
+
+// Shutdown gracefully shuts down the service, draining pending clicks
+func (s *service) Shutdown(ctx context.Context) error {
+	log.Printf("[SHORTENER] Shutting down service, draining %d pending clicks", len(s.clickChan))
+
+	// Signal workers to stop accepting new work
+	close(s.shutdown)
+
+	// Drain remaining clicks with timeout
+	done := make(chan struct{})
+	go func() {
+		// Process remaining items in the buffer
+		for {
+			select {
+			case job, ok := <-s.clickChan:
+				if !ok {
+					close(done)
+					return
+				}
+				if err := s.recordClickAsync(ctx, job.url, job.clickCtx); err != nil {
+					log.Printf("[SHORTENER] WARNING: Failed to record click during shutdown: %v", err)
+				}
+			default:
+				// Buffer is empty, close channel and wait for workers
+				close(s.clickChan)
+				s.wg.Wait()
+				close(done)
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-done:
+		log.Printf("[SHORTENER] Service shutdown complete")
+		return nil
+	case <-ctx.Done():
+		log.Printf("[SHORTENER] WARNING: Shutdown timed out, some clicks may be lost")
+		return ctx.Err()
+	}
 }

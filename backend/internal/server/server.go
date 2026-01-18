@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -22,7 +23,42 @@ type Server struct {
 	shortenerHandler *shortener.Handler
 }
 
-func NewServer() *http.Server {
+// App wraps the HTTP server and provides lifecycle management
+type App struct {
+	HTTPServer   *http.Server
+	shortenerSvc shortener.Service
+	db           database.Service
+}
+
+// Shutdown gracefully shuts down the application
+func (a *App) Shutdown(ctx context.Context) error {
+	log.Println("[APP] Starting graceful shutdown...")
+
+	// Shutdown HTTP server first
+	if err := a.HTTPServer.Shutdown(ctx); err != nil {
+		log.Printf("[APP] HTTP server shutdown error: %v", err)
+	}
+
+	// Shutdown shortener service (drains pending clicks)
+	if err := a.shortenerSvc.Shutdown(ctx); err != nil {
+		log.Printf("[APP] Shortener service shutdown error: %v", err)
+	}
+
+	// Close database connection
+	if err := a.db.Close(); err != nil {
+		log.Printf("[APP] Database close error: %v", err)
+	}
+
+	log.Println("[APP] Graceful shutdown complete")
+	return nil
+}
+
+// ListenAndServe starts the HTTP server
+func (a *App) ListenAndServe() error {
+	return a.HTTPServer.ListenAndServe()
+}
+
+func NewServer() *App {
 	// Parse port with proper error handling
 	portStr := os.Getenv("PORT")
 	if portStr == "" {
@@ -62,7 +98,7 @@ func NewServer() *http.Server {
 	}
 
 	// Declare Server config
-	server := &http.Server{
+	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", NewServer.port),
 		Handler:      NewServer.RegisterRoutes(),
 		IdleTimeout:  time.Minute,
@@ -70,5 +106,9 @@ func NewServer() *http.Server {
 		WriteTimeout: 30 * time.Second,
 	}
 
-	return server
+	return &App{
+		HTTPServer:   httpServer,
+		shortenerSvc: shortenerSvc,
+		db:           db,
+	}
 }

@@ -1,20 +1,15 @@
 package database
 
 import (
+	"backend/internal/models"
 	"context"
 	"database/sql"
 	"fmt"
 	"testing"
 	"time"
 
-	"backend/internal/models"
-
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
-
-// Note: These are integration tests that require a test database
-// To run them, you need to have PostgreSQL running and set up test database
-// For unit testing, you would mock the database interface
 
 func setupTestDB() (*sql.DB, error) {
 	// This would typically use environment variables for test database

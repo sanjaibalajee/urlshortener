@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -81,6 +82,7 @@ var (
 	ErrCustomCodeTooLong  = errors.New("custom code is too long")
 	ErrReservedCode       = errors.New("code is reserved")
 	ErrMaliciousURL       = errors.New("potentially malicious URL detected")
+	ErrSSRFDetected       = errors.New("URL points to internal/private network")
 )
 
 // Regular expressions for validation
@@ -143,6 +145,12 @@ func ValidateURL(targetURL string) error {
 		return err
 	}
 
+	// SSRF protection: check if host resolves to private/internal IP
+	if err := checkSSRF(parsedURL.Hostname()); err != nil {
+		log.Printf("[VALIDATION] ERROR: SSRF detected: %v", err)
+		return err
+	}
+
 	log.Printf("[VALIDATION] SUCCESS: URL validation passed for %s", parsedURL.Host)
 	return nil
 }
@@ -192,6 +200,115 @@ func checkMaliciousURL(targetURL string) error {
 		}
 	}
 	return nil
+}
+
+// checkSSRF checks if a hostname resolves to a private/internal IP address
+func checkSSRF(hostname string) error {
+	// Check for obviously internal hostnames
+	lowerHost := strings.ToLower(hostname)
+	internalHosts := []string{
+		"localhost",
+		"127.0.0.1",
+		"0.0.0.0",
+		"::1",
+		"[::1]",
+	}
+	for _, internal := range internalHosts {
+		if lowerHost == internal {
+			return fmt.Errorf("%w: %s is a local address", ErrSSRFDetected, hostname)
+		}
+	}
+
+	// Check for internal domain patterns
+	if strings.HasSuffix(lowerHost, ".local") ||
+		strings.HasSuffix(lowerHost, ".internal") ||
+		strings.HasSuffix(lowerHost, ".localhost") ||
+		strings.HasSuffix(lowerHost, ".localdomain") {
+		return fmt.Errorf("%w: %s is an internal domain", ErrSSRFDetected, hostname)
+	}
+
+	// Resolve hostname to IP addresses
+	ips, err := net.LookupIP(hostname)
+	if err != nil {
+		// If DNS lookup fails, we allow it (might be a valid external host with DNS issues)
+		// In a stricter environment, you might want to reject these
+		log.Printf("[SSRF] DNS lookup failed for %s: %v (allowing)", hostname, err)
+		return nil
+	}
+
+	// Check if any resolved IP is private/internal
+	for _, ip := range ips {
+		if isPrivateIP(ip) {
+			return fmt.Errorf("%w: %s resolves to private IP %s", ErrSSRFDetected, hostname, ip.String())
+		}
+	}
+
+	return nil
+}
+
+// isPrivateIP checks if an IP address is in a private/reserved range
+func isPrivateIP(ip net.IP) bool {
+	// Check for loopback
+	if ip.IsLoopback() {
+		return true
+	}
+
+	// Check for link-local
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+
+	// Check for private ranges
+	if ip.IsPrivate() {
+		return true
+	}
+
+	// Check for unspecified (0.0.0.0 or ::)
+	if ip.IsUnspecified() {
+		return true
+	}
+
+	// Additional checks for IPv4
+	if ip4 := ip.To4(); ip4 != nil {
+		// 169.254.0.0/16 (link-local, already covered but explicit)
+		if ip4[0] == 169 && ip4[1] == 254 {
+			return true
+		}
+		// 100.64.0.0/10 (Carrier-grade NAT)
+		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+			return true
+		}
+		// 192.0.0.0/24 (IETF Protocol Assignments)
+		if ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 0 {
+			return true
+		}
+		// 192.0.2.0/24 (TEST-NET-1)
+		if ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 2 {
+			return true
+		}
+		// 198.51.100.0/24 (TEST-NET-2)
+		if ip4[0] == 198 && ip4[1] == 51 && ip4[2] == 100 {
+			return true
+		}
+		// 203.0.113.0/24 (TEST-NET-3)
+		if ip4[0] == 203 && ip4[1] == 0 && ip4[2] == 113 {
+			return true
+		}
+		// 224.0.0.0/4 (Multicast)
+		if ip4[0] >= 224 && ip4[0] <= 239 {
+			return true
+		}
+		// 240.0.0.0/4 (Reserved for future use)
+		if ip4[0] >= 240 {
+			return true
+		}
+	}
+
+	// Additional checks for IPv6
+	// fc00::/7 (Unique local addresses) - IsPrivate() should catch this
+	// fe80::/10 (Link-local) - IsLinkLocalUnicast() should catch this
+
+	return false
 }
 
 // NormalizeURL normalizes a URL for consistent storage and comparison

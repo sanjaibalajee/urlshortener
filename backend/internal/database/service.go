@@ -398,6 +398,10 @@ func (s *service) GetBrowserStats(ctx context.Context, urlID int64, days int, li
 	return s.repository.GetBrowserStats(ctx, urlID, days, limit)
 }
 
+func (s *service) GetAnalyticsBatch(ctx context.Context, urlID int64, days int, referrerLimit int, browserLimit int) (*AnalyticsBatch, error) {
+	return s.repository.GetAnalyticsBatch(ctx, urlID, days, referrerLimit, browserLimit)
+}
+
 // GetDB returns the underlying database connection (for advanced use cases)
 func (s *service) GetDB() *sql.DB {
 	return s.db

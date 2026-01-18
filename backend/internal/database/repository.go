@@ -45,6 +45,7 @@ type URLRepository interface {
 	GetClicksByDay(ctx context.Context, urlID int64, days int) ([]models.DayStat, error)
 	GetTopReferrers(ctx context.Context, urlID int64, days int, limit int) ([]models.ReferrerStat, error)
 	GetBrowserStats(ctx context.Context, urlID int64, days int, limit int) ([]models.BrowserStat, error)
+	GetAnalyticsBatch(ctx context.Context, urlID int64, days int, referrerLimit int, browserLimit int) (*AnalyticsBatch, error)
 
 	// Maintenance
 	CleanupExpiredURLs(ctx context.Context) (int64, error)
@@ -609,4 +610,116 @@ func (r *Repository) Health(ctx context.Context) error {
 
 	log.Printf("[REPOSITORY] Health check passed")
 	return nil
+}
+
+// AnalyticsBatch holds all analytics data from a single batched query
+type AnalyticsBatch struct {
+	ClicksByDay  []models.DayStat
+	TopReferrers []models.ReferrerStat
+	BrowserStats []models.BrowserStat
+}
+
+// GetAnalyticsBatch retrieves all analytics data in a single query using CTEs
+func (r *Repository) GetAnalyticsBatch(ctx context.Context, urlID int64, days int, referrerLimit int, browserLimit int) (*AnalyticsBatch, error) {
+	log.Printf("[REPOSITORY] Getting batched analytics for URL ID %d (last %d days)", urlID, days)
+
+	query := `
+		WITH params AS (
+			SELECT $1::bigint AS url_id,
+			       NOW() - $2 * INTERVAL '1 day' AS since
+		),
+		clicks_by_day AS (
+			SELECT DATE(occurred_at) AS click_date, COUNT(*) AS clicks
+			FROM click_events, params
+			WHERE url_id = params.url_id
+			  AND occurred_at >= params.since
+			GROUP BY DATE(occurred_at)
+			ORDER BY click_date DESC
+		),
+		top_referrers AS (
+			SELECT COALESCE(referrer, 'Direct') AS referrer, COUNT(*) AS clicks
+			FROM click_events, params
+			WHERE url_id = params.url_id
+			  AND occurred_at >= params.since
+			GROUP BY referrer
+			ORDER BY clicks DESC
+			LIMIT $3
+		),
+		browser_stats AS (
+			SELECT
+				CASE
+					WHEN ua ILIKE '%%chrome%%' THEN 'Chrome'
+					WHEN ua ILIKE '%%firefox%%' THEN 'Firefox'
+					WHEN ua ILIKE '%%safari%%' AND ua NOT ILIKE '%%chrome%%' THEN 'Safari'
+					WHEN ua ILIKE '%%edge%%' THEN 'Edge'
+					WHEN ua ILIKE '%%opera%%' THEN 'Opera'
+					WHEN ua ILIKE '%%postman%%' THEN 'Postman'
+					ELSE 'Other'
+				END AS browser,
+				COUNT(*) AS clicks
+			FROM click_events, params
+			WHERE url_id = params.url_id
+			  AND occurred_at >= params.since
+			  AND ua IS NOT NULL
+			GROUP BY browser
+			ORDER BY clicks DESC
+			LIMIT $4
+		)
+		SELECT 'day' AS result_type, click_date::text AS key, clicks FROM clicks_by_day
+		UNION ALL
+		SELECT 'referrer' AS result_type, referrer AS key, clicks FROM top_referrers
+		UNION ALL
+		SELECT 'browser' AS result_type, browser AS key, clicks FROM browser_stats
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, urlID, days, referrerLimit, browserLimit)
+	if err != nil {
+		log.Printf("[REPOSITORY] ERROR: Failed to query batched analytics: %v", err)
+		return nil, fmt.Errorf("failed to get batched analytics: %w", err)
+	}
+	defer rows.Close()
+
+	batch := &AnalyticsBatch{
+		ClicksByDay:  []models.DayStat{},
+		TopReferrers: []models.ReferrerStat{},
+		BrowserStats: []models.BrowserStat{},
+	}
+
+	for rows.Next() {
+		var resultType, key string
+		var clicks int64
+
+		if err := rows.Scan(&resultType, &key, &clicks); err != nil {
+			log.Printf("[REPOSITORY] ERROR: Failed to scan analytics row: %v", err)
+			continue
+		}
+
+		switch resultType {
+		case "day":
+			batch.ClicksByDay = append(batch.ClicksByDay, models.DayStat{
+				Date:   key,
+				Clicks: clicks,
+			})
+		case "referrer":
+			batch.TopReferrers = append(batch.TopReferrers, models.ReferrerStat{
+				Referrer: key,
+				Clicks:   clicks,
+			})
+		case "browser":
+			batch.BrowserStats = append(batch.BrowserStats, models.BrowserStat{
+				Browser: key,
+				Clicks:  clicks,
+			})
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Printf("[REPOSITORY] ERROR: Row iteration error: %v", err)
+		return nil, fmt.Errorf("row iteration error: %w", err)
+	}
+
+	log.Printf("[REPOSITORY] SUCCESS: Retrieved batched analytics - Days: %d, Referrers: %d, Browsers: %d",
+		len(batch.ClicksByDay), len(batch.TopReferrers), len(batch.BrowserStats))
+
+	return batch, nil
 }

@@ -50,6 +50,14 @@ CREATE TABLE reserved_codes (
 CREATE INDEX reserved_codes_reason_idx ON reserved_codes (reason);
 
 
-ALTER TABLE urls 
-ADD CONSTRAINT urls_not_reserved_check 
+ALTER TABLE urls
+ADD CONSTRAINT urls_not_reserved_check
 CHECK (short_code NOT IN (SELECT code FROM reserved_codes));
+
+-- Performance indexes for analytics queries
+CREATE INDEX IF NOT EXISTS click_events_url_date_idx
+    ON click_events(url_id, DATE(occurred_at));
+CREATE INDEX IF NOT EXISTS click_events_referrer_idx
+    ON click_events(url_id, referrer) WHERE referrer IS NOT NULL;
+CREATE INDEX IF NOT EXISTS click_events_ua_idx
+    ON click_events(url_id, ua) WHERE ua IS NOT NULL;

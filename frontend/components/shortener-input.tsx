@@ -6,7 +6,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { ArrowRightIcon, Cross1Icon, Link1Icon as Link1Icon} from "@radix-ui/react-icons";
 import { inputVariants } from "@/components/ui/input";
-import { shortenUrl } from "@/app/actions/url-services";
+import { shortenUrl } from "@/lib/api";
 
 const DURATION = 0.3;
 const DELAY = DURATION;

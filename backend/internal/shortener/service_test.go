@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"backend/internal/database"
 	"backend/internal/models"
 )
 
@@ -147,6 +148,24 @@ func (m *MockRepository) GetBrowserStats(ctx context.Context, urlID int64, days 
 	return []models.BrowserStat{
 		{Browser: "Chrome", Clicks: 6},
 		{Browser: "Firefox", Clicks: 2},
+	}, nil
+}
+
+func (m *MockRepository) GetAnalyticsBatch(ctx context.Context, urlID int64, days int, referrerLimit int, browserLimit int) (*database.AnalyticsBatch, error) {
+	// Mock implementation - return sample data
+	return &database.AnalyticsBatch{
+		ClicksByDay: []models.DayStat{
+			{Date: "2025-09-01", Clicks: 5},
+			{Date: "2025-09-02", Clicks: 3},
+		},
+		TopReferrers: []models.ReferrerStat{
+			{Referrer: "Direct", Clicks: 8},
+			{Referrer: "google.com", Clicks: 2},
+		},
+		BrowserStats: []models.BrowserStat{
+			{Browser: "Chrome", Clicks: 6},
+			{Browser: "Firefox", Clicks: 2},
+		},
 	}, nil
 }
 

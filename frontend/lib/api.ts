@@ -1,5 +1,3 @@
-'use server'
-
 interface ShortenUrlRequest {
   url: string
   custom_code?: string
@@ -21,7 +19,7 @@ interface ErrorResponse {
   message: string
 }
 
-const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8080'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080'
 
 export async function shortenUrl(request: ShortenUrlRequest): Promise<ShortenUrlResponse | ErrorResponse> {
   try {
@@ -58,7 +56,7 @@ export async function getRedirectUrl(shortCode: string): Promise<string | null> 
     if (response.status === 302 || response.status === 301) {
       return response.headers.get('location')
     }
-    
+
     return null
   } catch (error) {
     console.error('Error getting redirect URL:', error)

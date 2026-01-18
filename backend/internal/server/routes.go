@@ -4,15 +4,23 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
+
+	mw "backend/internal/middleware"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 )
 
 func (s *Server) RegisterRoutes() http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.Logger)
+	r.Use(chimiddleware.Logger)
+	r.Use(chimiddleware.Recoverer)
+
+	// Rate limiting: 100 requests per minute per IP
+	rateLimiter := mw.NewRateLimiter(100, 1*time.Minute)
+	r.Use(rateLimiter.Middleware)
 
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"https://*", "http://*"},
@@ -26,7 +34,7 @@ func (s *Server) RegisterRoutes() http.Handler {
 	r.Get("/", s.HelloWorldHandler)
 	r.Get("/health", s.healthHandler)
 	r.Get("/db-test", s.dbTestHandler)
-	
+
 	// Register shortener routes
 	s.shortenerHandler.RegisterRoutes(r)
 
