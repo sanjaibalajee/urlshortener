@@ -89,6 +89,8 @@ jobs:
     - name: Deploy binary to EC2
       run: |
         ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@${{ secrets.EC2_HOST }} "mkdir -p /home/ubuntu/url-shortener"
+        echo "⏹️ Stopping service..."
+        ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@${{ secrets.EC2_HOST }} "sudo systemctl stop url-shortener || true"
         echo "🚀 Copying binary to EC2..."
         scp -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no url-shortener ubuntu@${{ secrets.EC2_HOST }}:/home/ubuntu/url-shortener/url-shortener
         echo "🔄 Restarting service..."
