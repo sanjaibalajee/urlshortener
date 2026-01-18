@@ -1,33 +1,8 @@
 import { redirect } from 'next/navigation'
+import { getRedirectUrl } from '@/lib/api'
 
 interface PageProps {
   params: Promise<{ shortCode: string }>
-}
-
-async function getRedirectUrl(shortCode: string): Promise<string | null> {
-  try {
-    const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:8080'
-    const response = await fetch(`${apiBaseUrl}/${shortCode}`, {
-      method: 'GET',
-      redirect: 'manual',
-      cache: 'no-store'
-    })
-
-    if (response.status === 302 || response.status === 301) {
-      return response.headers.get('location')
-    }
-    
-    if (response.status === 404) {
-      const errorData = await response.json()
-      console.log('URL not found:', errorData)
-      return null
-    }
-    
-    return null
-  } catch (error) {
-    console.error('Error getting redirect URL:', error)
-    return null
-  }
 }
 
 export default async function RedirectPage({ params }: PageProps) {

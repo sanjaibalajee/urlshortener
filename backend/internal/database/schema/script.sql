@@ -50,9 +50,25 @@ CREATE TABLE reserved_codes (
 CREATE INDEX reserved_codes_reason_idx ON reserved_codes (reason);
 
 
-ALTER TABLE urls
-ADD CONSTRAINT urls_not_reserved_check
-CHECK (short_code NOT IN (SELECT code FROM reserved_codes));
+-- Enforce that no new URLs may use a reserved code via trigger instead of a CHECK constraint,
+-- since PostgreSQL does not support subqueries in CHECK constraints.
+
+-- Create a trigger function to check reserved codes on insert/update
+CREATE OR REPLACE FUNCTION prevent_reserved_short_code()
+RETURNS trigger AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM reserved_codes WHERE code = NEW.short_code) THEN
+    RAISE EXCEPTION 'short_code "%" is reserved and cannot be used', NEW.short_code;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create the trigger on INSERT and UPDATE on 'urls'
+CREATE TRIGGER urls_prevent_reserved_code_trigger
+BEFORE INSERT OR UPDATE ON urls
+FOR EACH ROW
+EXECUTE FUNCTION prevent_reserved_short_code();
 
 -- Performance indexes for analytics queries
 CREATE INDEX IF NOT EXISTS click_events_url_date_idx
@@ -61,3 +77,4 @@ CREATE INDEX IF NOT EXISTS click_events_referrer_idx
     ON click_events(url_id, referrer) WHERE referrer IS NOT NULL;
 CREATE INDEX IF NOT EXISTS click_events_ua_idx
     ON click_events(url_id, ua) WHERE ua IS NOT NULL;
+
